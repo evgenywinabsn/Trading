@@ -29,9 +29,9 @@
 - [快速开始](#快速开始)
 - [Web UI](#web-ui)
 - [配置说明](#配置说明)
-- [运行案例](#运行案例)
 - [项目结构](#项目结构)
 - [致谢](#致谢)
+- [Donate](#donate)
 - [许可证](#许可证)
 
 ---
@@ -277,19 +277,6 @@ streamlit run web/app.py
 
 ---
 
-## 运行案例
-
-以下是使用 Kimi 2.6 对科创板标的 688017（绿的谐波-SH）的分析结果摘要：
-
-> **最终决策：Underweight（减持）**
->
-> 7 个 Analyst 经过 Bull/Bear 辩论和三方风险评估后，Portfolio Manager 建议减持 25-33% 仓位。
-> 关键因素：政策面中性偏正、游资净流出明显、近期有解禁压力、基本面现金流恶化。
-
-更多案例将在 `examples/` 目录持续更新。
-
----
-
 ## 项目结构
 
 ```
@@ -352,6 +339,22 @@ TradingAgents-Astock/
 [Apache License 2.0](./LICENSE)
 
 本项目是 TauricResearch/TradingAgents 的 fork，继承 Apache 2.0 许可证。详见 [NOTICE](./NOTICE)。
+
+## Donate
+
+如果这个工具帮到了你的投研工作流，欢迎请作者喝杯咖啡 ☕
+
+<p align="center">
+  <img src="./assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
+</p>
+<p align="center">
+  <a href="https://ifdian.net/a/simonlin">爱发电</a> ·
+  <a href="https://buymeacoffee.com/simonlin1212">Buy Me a Coffee</a>
+</p>
+
+> 想要什么功能？欢迎开 [Issue](evgeny.kpos@gmail.com/tradingagents-astock/issues) 提需求，赞助者的 Issue 优先处理。
+
+---
 
 ## 免责声明
 
