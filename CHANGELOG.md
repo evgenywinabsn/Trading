@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.2.5] — 2026-05-17
+
+### Breaking Changes
+
+- **移除 akshare 依赖** — `akshare>=1.18.0` 从 `pyproject.toml` 中删除。
+  所有原 akshare 调用已替换为直接 HTTP API（东财 datacenter、新浪财经、
+  同花顺 10jqka、财联社 cls.cn、百度股市通）。
+
+### Changed
+
+- `tradingagents/dataflows/a_stock.py` 全面重构数据获取层：
+  - `get_stock_data()` → 新浪 JSON K线 API + push2.eastmoney 实时行情
+  - `get_stock_info()` → push2.eastmoney 个股基本信息
+  - `get_stock_news()` → 东财 np-weblist 滚动新闻（已有，无变化）
+  - `get_financial_data()` → 新浪财经财报三表 API
+  - `get_market_news()` → 财联社 cls.cn 快讯 + 东财 np-weblist
+  - `get_analyst_forecast()` → 同花顺 10jqka EPS 一致预期
+  - `get_dragon_tiger_board()` → 东财 datacenter RPT_DAILYBILLBOARD
+  - `get_restricted_release()` → 东财 datacenter RPT_LIFT_STAGE
+  - `get_industry_overview()` → push2.eastmoney 板块行情
+- 新增内部 helper：`_eastmoney_datacenter()`、`_ths_eps_forecast()`、`_sina_kline_fallback()`
+- 所有函数签名和返回格式保持不变，对上层 Agent 透明
+
+### Fixed
+
+- 彻底消除 akshare + pandas 3.0 + pyarrow 的 `ArrowInvalid` 崩溃问题
+- 消除 akshare 与 mootdx 的 httpx 版本冲突
+
 ## [0.2.4] — 2026-04-25
 
 ### Added
