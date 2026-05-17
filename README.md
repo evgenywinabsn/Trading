@@ -46,7 +46,7 @@
 
 | 维度 | 原版 | 本 Fork |
 |------|------|---------|
-| **数据源** | Yahoo Finance / Alpha Vantage | mootdx + 腾讯财经 + akshare（全免费） |
+| **数据源** | Yahoo Finance / Alpha Vantage | mootdx + 东财 + 新浪 + 同花顺（全免费直连） |
 | **Analyst 角色** | 4 个（市场/情绪/新闻/基本面） | **7 个**（+政策分析师/游资追踪/解禁监控） |
 | **交易规则** | 美股（T+0、无涨跌停） | A 股（T+1、涨跌停、最小手数、交易时段） |
 | **输出语言** | 英文 | 中文报告（内部辩论保持英文以保证推理质量） |
@@ -60,7 +60,7 @@
 |------|-------------------|-------------|
 | 许可证 | Apache 2.0 | **全 Apache 2.0** |
 | 部署依赖 | pip install | **开箱即用** |
-| A 股数据 | ❌ | **mootdx + 腾讯 + akshare（免费）** |
+| A 股数据 | ❌ | **mootdx + 东财 + 新浪 + 同花顺（直连 HTTP）** |
 | A 股特化角色 | ❌ | **政策/游资/解禁 3 个深度角色** |
 | A 股交易约束 | ❌ | **T+1/涨跌停/手数/ST 全覆盖** |
 
@@ -130,7 +130,10 @@
 |------|------|---------|
 | **mootdx** | TCP 7709 | OHLCV K 线、财务快照、F10 文本 |
 | **腾讯财经** | HTTP (`qt.gtimg.cn`) | PE / PB / 市值 / 换手率（实时） |
-| **akshare** | Python 库 | 新闻、财报三表（sina 源）、股票信息 |
+| **东方财富** | HTTP (datacenter / push2) | 龙虎榜、限售解禁、板块行情、个股信息 |
+| **新浪财经** | HTTP | K 线历史、财报三表 |
+| **同花顺** | HTTP (10jqka) | EPS 一致预期 |
+| **财联社** | HTTP (cls.cn) | 全球财经快讯 |
 
 > 完全不依赖 Tushare（积分墙）、Alpha Vantage（海外 API）、Yahoo Finance（不支持 A 股）。
 
@@ -297,7 +300,7 @@ TradingAgents-Astock/
 │   │   ├── trader/            # Trader（A 股交易约束）
 │   │   └── utils/             # 状态定义、工具函数
 │   ├── dataflows/
-│   │   ├── a_stock.py         # A 股数据 vendor（mootdx + 腾讯 + akshare）
+│   │   ├── a_stock.py         # A 股数据 vendor（直连 HTTP API，零第三方库）
 │   │   ├── interface.py       # 数据接口抽象层
 │   │   └── ...
 │   └── graph/

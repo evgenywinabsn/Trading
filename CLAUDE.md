@@ -6,18 +6,22 @@
 - **仓库**: evgeny.kpos@gmail.com
 - **协议**: Apache 2.0
 - **Python**: >=3.10
-- **当前版本**: 0.2.4
+- **当前版本**: 0.2.5
 
 ## 架构
 
-### 数据层
+### 数据层（v0.2.5 全部直连 HTTP，零第三方数据库依赖）
 | 来源 | 协议 | 数据 |
 |------|------|------|
 | mootdx | TCP 7709 | OHLCV K线、财务快照、F10 文本 |
 | 腾讯财经 | HTTP (qt.gtimg.cn) | PE/PB/市值/换手率 |
-| 东方财富 | HTTP (直连 API) | 个股新闻 |
-| akshare | Python 库 | 财报三表、股票信息、一致预期 EPS |
-| 同花顺 | HTTP | 热股题材归因、北向资金 |
+| 东方财富 datacenter | HTTP (datacenter-web) | 龙虎榜、限售解禁、板块行情 |
+| 东方财富 push2 | HTTP (push2.eastmoney) | 实时行情、个股信息、板块列表 |
+| 东方财富 np-weblist | HTTP | 滚动新闻 |
+| 新浪财经 | HTTP (money.finance.sina) | K线历史、财报三表 |
+| 同花顺 10jqka | HTTP | EPS 一致预期、热股题材 |
+| 财联社 cls.cn | HTTP | 全球财经快讯 |
+| 百度股市通 | HTTP (gushitong.baidu) | 备用行情 |
 
 ### Agent 角色（7 个）
 原版 4 个（市场/情绪/新闻/基本面）+ A 股特化 3 个（政策分析师/游资追踪/解禁监控）
@@ -37,8 +41,8 @@
 ### 依赖冲突
 mootdx 锁死 httpx==0.25.2，与 langchain-google-genai 的 httpx>=0.28.1 冲突。不用 Google 模型时可 `pip install mootdx --no-deps` 绕过。
 
-### akshare 上游 bug
-akshare 在 pandas 3.0 + pyarrow 环境下，`stock_news_em` 的 `str.replace(r"　", "", regex=True)` 会崩。用户需升级 akshare 或手动改 `regex=False`。已在项目中增加东方财富直连 API 作为替代方案。
+### akshare 已移除（v0.2.5）
+v0.2.5 起完全移除 akshare 依赖，所有数据通过直连 HTTP API 获取。彻底消除了 akshare + pandas 3.0 + pyarrow 的 `ArrowInvalid` 崩溃问题，也消除了 akshare 与 mootdx 的 httpx 版本冲突。
 
 ### 模型兼容性
 deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 位代码。`safe_ticker_component` 已加兜底自动转码，但不同模型表现仍有差异。
