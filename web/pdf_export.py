@@ -30,6 +30,15 @@ def _strip_think(text: str) -> str:
     return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
 
 
+def _strip_md_inline(text: str) -> str:
+    """Remove inline markdown formatting: **bold**, *italic*, `code`, [link](url)."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
+    return text
+
+
 def _signal_color(signal: str) -> tuple[int, int, int]:
     s = signal.upper()
     if "BUY" in s:
@@ -129,10 +138,104 @@ class _ReportPDF(FPDF):
         self.cell(0, 10, title)
         self.ln(12)
 
-        self._use_font("", 10)
-        self.set_text_color(40, 40, 40)
         cleaned = _strip_think(content)
-        self.multi_cell(0, 5.5, cleaned)
+        self._render_markdown(cleaned)
+
+    def _render_markdown(self, text: str) -> None:
+        """Render markdown-formatted text with basic styling."""
+        lines = text.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+
+            # Empty line → small vertical gap
+            if not stripped:
+                self.ln(3)
+                i += 1
+                continue
+
+            # Headings: ### → 11pt, ## → 13pt, # → 14pt
+            if stripped.startswith("###"):
+                self._use_font("B", 11)
+                self.set_text_color(50, 50, 50)
+                self.cell(0, 7, stripped.lstrip("#").strip())
+                self.ln(8)
+                i += 1
+                continue
+            if stripped.startswith("##"):
+                self._use_font("B", 13)
+                self.set_text_color(40, 40, 40)
+                self.cell(0, 8, stripped.lstrip("#").strip())
+                self.ln(9)
+                i += 1
+                continue
+            if stripped.startswith("#"):
+                self._use_font("B", 14)
+                self.set_text_color(255, 90, 31)
+                self.cell(0, 9, stripped.lstrip("#").strip())
+                self.ln(10)
+                i += 1
+                continue
+
+            # Horizontal rule
+            if stripped in ("---", "***", "___"):
+                self.set_draw_color(180, 180, 180)
+                y = self.get_y() + 2
+                self.line(10, y, self.w - 10, y)
+                self.ln(6)
+                i += 1
+                continue
+
+            # Bullet points (-, *, numbered)
+            if re.match(r"^[-*]\s", stripped) or re.match(r"^\d+[.)]\s", stripped):
+                self._use_font("", 10)
+                self.set_text_color(40, 40, 40)
+                if re.match(r"^[-*]\s", stripped):
+                    bullet = "  •  "
+                    body = stripped[2:].strip()
+                else:
+                    m = re.match(r"^(\d+[.)])\s*(.*)", stripped)
+                    bullet = f"  {m.group(1)} "
+                    body = m.group(2)
+                body = _strip_md_inline(body)
+                self.multi_cell(0, 5.5, bullet + body)
+                i += 1
+                continue
+
+            # Table rows (|col|col|) → render as plain text with spacing
+            if stripped.startswith("|") and stripped.endswith("|"):
+                # Skip separator rows like |---|---|
+                if re.match(r"^\|[-:\s|]+\|$", stripped):
+                    i += 1
+                    continue
+                self._use_font("", 9)
+                self.set_text_color(60, 60, 60)
+                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                row_text = "    ".join(_strip_md_inline(c) for c in cells)
+                self.multi_cell(0, 5, row_text)
+                i += 1
+                continue
+
+            # Regular paragraph — collect consecutive non-special lines
+            para_lines = []
+            while i < len(lines):
+                ln = lines[i].strip()
+                if not ln or ln.startswith("#") or ln.startswith("|") or re.match(r"^[-*]\s", ln) or re.match(r"^\d+[.)]\s", ln) or ln in ("---", "***", "___"):
+                    break
+                para_lines.append(ln)
+                i += 1
+
+            if para_lines:
+                self._use_font("", 10)
+                self.set_text_color(40, 40, 40)
+                para = " ".join(para_lines)
+                para = _strip_md_inline(para)
+                self.multi_cell(0, 5.5, para)
+                self.ln(2)
+                continue
+
+            i += 1
 
 
 def generate_pdf(final_state: dict[str, Any], ticker: str, trade_date: str, signal: str) -> bytes:
