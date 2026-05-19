@@ -6,7 +6,7 @@
 - **仓库**: evgeny.kpos@gmail.com
 - **协议**: Apache 2.0
 - **Python**: >=3.10
-- **当前版本**: 0.2.6
+- **当前版本**: 0.2.7
 
 ## 架构
 
@@ -16,12 +16,12 @@
 | mootdx | TCP 7709 | OHLCV K线、财务快照、F10 文本 |
 | 腾讯财经 | HTTP (qt.gtimg.cn) | PE/PB/市值/换手率 |
 | 东方财富 datacenter | HTTP (datacenter-web) | 龙虎榜、限售解禁、板块行情 |
-| 东方财富 push2 | HTTP (push2.eastmoney) | 实时行情、个股信息、板块列表 |
+| 东方财富 push2/push2his | HTTP (push2.eastmoney) | 实时行情、个股信息、板块列表、资金流(分钟+日级) |
 | 东方财富 np-weblist | HTTP | 滚动新闻 |
 | 新浪财经 | HTTP (money.finance.sina) | K线历史、财报三表 |
 | 同花顺 10jqka | HTTP | EPS 一致预期、热股题材 |
 | 财联社 cls.cn | HTTP | 全球财经快讯 |
-| 百度股市通 | HTTP (gushitong.baidu) | 备用行情 |
+| 百度股市通 | HTTP (gushitong.baidu) | 概念板块归属（资金流已迁移至东财push2） |
 
 ### Agent 角色（7 个）
 原版 4 个（市场/情绪/新闻/基本面）+ A 股特化 3 个（政策分析师/游资追踪/解禁监控）
@@ -44,8 +44,8 @@ mootdx 锁死 httpx==0.25.2，与 langchain-google-genai 的 httpx>=0.28.1 冲�
 ### akshare 已移除（v0.2.5）
 v0.2.5 起完全移除 akshare 依赖，所有数据通过直连 HTTP API 获取。
 
-### 百度 PAE 资金流接口已下线
-`fundsortlist` 和 `fundflow` 两个接口返回空（2026-05-19 确认）。替代方案：东财 push2 分钟级资金流（`push2.eastmoney.com/api/qt/stock/fflow/kline/get`）。a-stock-data 侧待替换。
+### 百度 PAE 资金流接口已下线（v0.2.7 已修复）
+`fundsortlist` 和 `fundflow` 两个接口返回空（2026-05-19 确认）。v0.2.7 已替换为东财 push2 资金流 API。同时修复了 `RPT_ORGANIZATION_BUSSINESS`（改用席位筛选机构）和东财全球资讯 `req_trace` 参数。
 
 ### 模型兼容性
 deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 位代码。`safe_ticker_component` 已加兜底自动转码，但不同模型表现仍有差异。
