@@ -12,12 +12,6 @@ license = {text = "Apache-2.0"}
 authors = [
     {name = "simonlin1212", email = "evgeny.kpos@gmail.com"},
 ]
-
-[project.urls]
-Homepage = "evgeny.kpos@gmail.com/tradingagents-astock"
-Repository = "evgeny.kpos@gmail.com/tradingagents-astock"
-Issues = "evgeny.kpos@gmail.com/tradingagents-astock/issues"
-Upstream = "evgeny.kpos@gmail.com"
 dependencies = [
     "langchain-core>=0.3.81",
     "backtrader>=1.9.78.123",
@@ -44,6 +38,12 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "mootdx>=0.10.0",
 ]
+
+[project.urls]
+Homepage = "evgeny.kpos@gmail.com/tradingagents-astock"
+Repository = "evgeny.kpos@gmail.com/tradingagents-astock"
+Issues = "evgeny.kpos@gmail.com/tradingagents-astock/issues"
+Upstream = "evgeny.kpos@gmail.com"
 
 [project.optional-dependencies]
 google = ["langchain-google-genai>=4.0.0"]
