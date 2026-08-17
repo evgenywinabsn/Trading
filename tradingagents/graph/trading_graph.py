@@ -59,6 +59,7 @@ from .setup import ROLE_KEYS, GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
+from ..llm_clients.factory import _OPENAI_COMPATIBLE
 
 # 七个分析师角色——它们受 `selected_analysts` 控制，没选中就不会进图。
 _ANALYST_ROLES = frozenset({
@@ -70,6 +71,9 @@ _PROVIDER_SPECIFIC_KWARGS = frozenset({
     "reasoning_effort",   # openai
     "thinking_level",     # google
     "effort",             # anthropic
+    "max_retries",        # 仅 openai_compatible 设为 0；换 provider 时沿用 SDK 默认
+    "app_retries",        # 仅 openai_client 读取
+    "app_retry_delay",    # 仅 openai_client 读取
 })
 
 
@@ -422,6 +426,20 @@ class TradingAgentsGraph:
         max_tokens = self.config.get("max_tokens")
         if max_tokens:
             kwargs["max_tokens"] = max_tokens
+
+        # 项目级 LLM 请求超时/重试（#300705 静默卡死兜底）：单次请求挂起时
+        # 由 timeout 兜底，避免风险辩论节点永久卡住（进程 alive 但无输出）。
+        timeout = self.config.get("llm_timeout")
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        # 应用层重试机制仅在 NormalizedChatOpenAI (OpenAIClient) 中实现。
+        # 仅对走 OpenAIClient 的 provider 关 SDK 重试（恒 0）并注入应用层退避重试参数；
+        # 其余 provider（anthropic / google 等）沿用各家 SDK 原生重试，不碰 max_retries，
+        # 避免 Claude 直连与 Gemini 用户的 SDK 重试被静默关掉（PR #100 review）。
+        if provider in _OPENAI_COMPATIBLE:
+            kwargs["max_retries"] = 0
+            kwargs["app_retries"] = self.config.get("llm_max_retries", 3)
+            kwargs["app_retry_delay"] = self.config.get("llm_retry_delay", 5)
 
         if provider == "google":
             thinking_level = self.config.get("google_thinking_level")
