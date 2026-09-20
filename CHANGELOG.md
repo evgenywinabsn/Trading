@@ -6,6 +6,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.18] — 2026-09-20
+
+### ⚠️ 兼容性：`langgraph` 最低版本提升至 1.0（#107，by @zhanghang02）
+
+缺失数据追踪在 `ToolNode` 上使用 `wrap_tool_call`，该参数从 LangGraph 1.0 起提供
+（实测 0.6.11 没有）。项目依赖由 `langgraph>=0.4.8` 提升为 `langgraph>=1.0`，
+用旧版 LangGraph 的用户需要先 `pip install -U langgraph` 再升级本项目。
+
+### 新增：缺失数据的追踪、重试与呈现（#107，by @zhanghang02）
+
+此前某个工具取不到数时，分析师只会在报告里含糊带过，用户既不知道哪一块缺、也无从重试。
+现在 `ToolNode` 外面包一层记录器，把「哪个股票 / 哪天 / 哪个阶段 / 哪个工具」写进索引，
+报告页可以看到缺失清单并单独重试，重试结果会被复用而不是重新调一遍模型。
+
+- 失败判定不只看 `status`：还认 `[数据缺失: …]` 标记和一组失败措辞。
+  其中 `Error` 开头的前缀**只在 200 字以内的短响应上**才算失败——新闻标题本身就可能以
+  `Error` 开头，早先的 `^Error\b` 会把正常新闻判成失败。
+- 记账用 `try/except` 包住并吞掉异常：这一层是辅助功能，坏了也不能弄坏分析图。
+- 新增 `tests/test_missing_data_tasks.py`、`tests/test_report_viewer_pdf_gate.py`，
+  并把 `tests/test_sentiment_data_tools.py` 里校验「图里的 ToolNode 与分析师工具表一致」
+  的正则放宽到兼容 `wrap_tool_call` 在与不在两种写法——否则加了这层包装后该校验会直接失配。
+
+### 修复：同花顺一致预期在 pandas 3.x 下恒为空（#111，by @FelixWang119）
+
+`pd.read_html(r.text)` 直接传字符串字面量的用法在 pandas 2.1 起废弃、3.0 移除，
+改为 `pd.read_html(io.StringIO(r.text))`。
+
+### 修复：百度概念板块把风控拦截说成「该股没有概念板块」（#111，by @FelixWang119）
+
+百度 PAE 被风控时回 HTTP 403 + `{"ResultCode": 0, "Result": {"code": 403, "msg": "hit risk"}}`，
+外层 `ResultCode` 是**整数** `0`，而正常响应是**字符串** `"0"`——原先的 `str(ResultCode) != "0"`
+两种都放行，于是风控响应一路走到「取不到分类」的分支，返回 `No concept/block data`。
+一个「被拦截」的事实就这样变成「这只股票没有概念板块」喂给模型。现在单独识别 403 并如实报错。
+
+> 该接口对 python-requests 的 TLS 指纹做风控（同一时刻 curl 正常），要稳定取数需要
+> `curl_cffi` 这类浏览器指纹伪装；本次只保证失败时说实话，不做伪装。
+
+### ⚠️ 修复：CLI 与 Web 连到不同站点，glm / qwen 统一到国内站（#113，by @FelixWang119）
+
+同一批 provider 的 base URL 写在两处：`cli/utils.py` 给 CLI 用、`llm_clients/openai_client.py`
+的 `_PROVIDER_CONFIG` 给客户端兜底（Web 侧栏 Base URL 留空时生效）。v0.2.4 引入时就没对齐——
+glm 一边 `open.bigmodel.cn`（国内）一边 `api.z.ai`（海外），qwen 一边 `dashscope.aliyuncs.com`
+一边 `dashscope-intl`。两站互认同一个 key 且返回同一份模型列表，所以**从不报错**，
+只是从 CLI 跑和从 Web 跑会静默走不同网络路径。其余 provider 一直是一致的。
+
+统一到国内站：这是 A 股特化 fork，README 中英文都让用户去 `open.bigmodel.cn` 申请 key，
+代码理应回到文档已声明的意图上。
+
+> **可能影响你**：此前依赖 Web 侧默认走海外站的用户，现在会走国内站（国内站同样对海外可用，
+> 不会坏掉，只是路径不同）。要指定端点请用 `backend_url` 或 Web 侧栏的 Base URL 显式覆盖。
+
+新增 `tests/test_provider_endpoint_consistency.py` 钉住两处一致——这两个值此前零测试覆盖，
+所以分裂了三个版本没人发现。
+
+### 优化：辩论历史去重与滚动窗口压缩（#109，by @SummerCaptain）
+
+多空 / 风险辩手每轮把完整 `history` 注入 prompt，同时再单独注入一次「最后一条发言」，
+而那恰恰就是 `history` 的最后一条（五个 agent 的状态写回里，两者是同一个 `argument` 变量）——
+等于每轮都把最新发言塞两遍，注入 token 随轮数平方增长。去掉重复注入，零信息损失。
+
+同时新增 `compact_history`：超过 4 条发言时，早期发言压成「角色: 首句」一行，最近 4 条保留全文。
+**默认配置不触发**（`max_debate_rounds=1` → 多空 2 条、`max_risk_discuss_rounds=1` → 风险 3 条），
+只有调大轮数才生效，现有用户行为不变。
+
+### 修复：DeepSeek V4 不设输出上限会把网关拖到空闲超时（#103，by @k176060444-lgtm）
+
+V4 thinking 系不给 `max_tokens` 时，后端的长 reasoning 链会一直写下去，撞上网关约 3 分钟的
+idle timeout 导致进程挂起。`ModelCapabilities` 新增 `default_max_tokens`，只对**已实测的 V4 家族**
+（`^deepseek-v4` 匹配）兜底 8192，且仅在用户没有显式指定 `max_tokens` 时生效。
+
+> 这是 #100 review 结论的落地：全局 8192 会误伤 Claude / Gemini 等原生上限更高的模型，
+> 所以预算必须挂在 capabilities 上按模型给，而不是在客户端一刀切。
+
 ## [0.5.17] — 2026-09-05
 
 ### 新增：Web UI 记住 LLM 配置（#96，by @WenhuaXia）
