@@ -6,6 +6,136 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.19] — 2026-09-21
+
+### 修复：LLM 请求此前没有超时，挂起的网关会让分析永久卡住（#100，by @k176060444-lgtm）
+
+langchain 的封装层在用户没给超时时，会把 `None` **显式**传给底层 SDK 再传到 httpx ——
+httpx 收到显式 `None` 的语义是「不设超时」，不是「用默认值」。对着一个接受连接但永不回应的
+socket 实测：跑满 120 秒零输出、零异常。也就是说上游网关一挂，风险辩论节点不是等得久，
+是**永远不返回**，进程活着但没有任何输出。
+
+这**不是 OpenAI 路径独有的**。实测构造出来的对象（不是底层库的默认常量）：
+
+| 封装层 | 不给 timeout | 给 timeout=150 |
+|---|---|---|
+| `ChatOpenAI` | SDK client.timeout = `None`（无限等） | `150.0` |
+| `ChatAnthropic` | SDK client.timeout = `None`（无限等） | `150.0` |
+| `AzureChatOpenAI` | SDK client.timeout = `None`（无限等） | `150.0` |
+
+所以 `llm_timeout`（默认 150 秒）**对所有走 LangChain 客户端的 provider 生效**——
+`openai` / `anthropic` / `google` / `azure` 及全部 OpenAI 兼容项，订阅撞额度后的降级客户端
+也带上。（「另几家 SDK 自带 600 秒读超时」只对**裸 SDK** 成立，本项目从不直接用裸 SDK。）
+
+⚠️ **一处例外**：`claude_agent_sdk` 订阅覆盖的**主路径**不经过 LangChain 客户端
+（`AgentSDKChatModel` 直接调 Agent SDK 子进程），因此不受 `llm_timeout` 保护 ——
+这是**本版未消除的已知缺口**，不是新引入的。它的降级客户端走正常链路，不受影响。
+
+### 修复：SDK 重试被置 0 之后，应用层漏接了 429 / 408 / 409 与连接类错误
+
+#100 把 OpenAI 兼容路径的 SDK 层 `max_retries` 置 0、改由应用层指数退避重试，但应用层
+只捕获了 5xx 与读超时。SDK 原本的可重试集合是 **408 / 409 / 429 / 5xx + 连接类异常**
+（`openai/_base_client.py::_should_retry`），而 `RateLimitError` **不是**
+`InternalServerError` 的子类（实测 `issubclass` 为 False）——结果是这个「韧性 PR」把韧性
+做没了：高峰期一个 429 就能让整轮分析当场死掉，而 SDK 从前会重试 2 次。
+
+现在按 SDK 同一套判据重试；408 / 409 没有专属异常类型（408 是裸 `APIStatusError`、
+409 是 `ConflictError`），所以按状态码判。**鉴权 / 参数错误（400 / 401 / 404 / 422）
+仍然第一次就抛**，不让用户干等三轮退避才看到「你的 key 不对」。
+
+### 修复：超时与重试改为按**目标 provider** 计算，三个调用点各自应用
+
+这份 kwargs 有三个消费方——主客户端、订阅撞额度后的降级 `fallback_spec`、分角色模型
+`role_llms`——每个都可能指向**不同的** provider。此前按 `config["llm_provider"]` 一刀切，
+于是：
+
+- **降级路径一个韧性参数都没带**。降级目标往往就是一个 OpenAI 兼容网关，也就是上面那个
+  「永不返回」的洞所在；漏带的话，这个挂死会恰好在撞额度、最需要它工作的那一刻原样复现。
+- **`role_llms` 两个方向都错**。主 `anthropic` + `bull=deepseek` 时，deepseek 角色拿不到
+  应用层重试（而它的 SDK 重试本该被置 0 并接管）；反方向则会把 `max_retries=0` 套到
+  Anthropic 头上，静默关掉它自己的 SDK 重试。
+- **`agent_sdk_fallback_provider` 的比较是全仓唯一没有 `.lower()` 的**。写成 `"DeepSeek"`
+  时同一家被判成跨厂商，`backend_url` 被扔掉、降级请求发去官方默认端点（拿自建网关的 key
+  去官方认证 = 401）。
+
+### 修复：provider 字符串的归一化统一到 `create_llm_client` 这个中央边界
+
+provider 来自用户手写的 `llm_provider` / `role_llms` / 降级配置，`"DeepSeek"`、
+`" deepseek "` 都是常见写法（README 通篇就写作 DeepSeek）。工厂此前只做 `.lower()`，
+**带首尾空格的写法会一路走到最后抛 `Unsupported LLM provider`** ——
+`role_llms: {"bull": {"provider": " DeepSeek "}}` 直接让启动失败。
+
+现在 `create_llm_client` 统一 `strip().lower()`，并让 `trading_graph` 里那四处判据
+（`base_url` 取舍 / 专属参数过滤 / 韧性参数 / role 实例缓存键）共用**同一个**归一化结果。
+口径不一致的两个具体后果：同一家被判成跨厂商而丢掉 `backend_url`；
+`"deepseek"` 与 `" deepseek "` 被当成两家、同一个 (模型, 端点) 白建第二条连接。
+拼错的 provider（如 `"deepsek"`）仍照常报错，strip 不会把它"救"成可用。
+
+### 修复：opencode.ai 网关开了流式却没开 `stream_usage`，token 统计静默归零
+
+langchain 只在非流式回复上自带 `usage_metadata`；流式下要显式
+`stream_options.include_usage`，而它的自动开启逻辑在设了 `openai_api_base` 时直接跳过
+（opencode 这条路恒定设了 base_url）。后果不报错：整轮跑完统计面板写
+`tokens_in=0 / tokens_out=0`，看起来像「这次没花钱」。现在显式开启，
+并把 `stream_usage` 加入透传参数，需要关掉的人可以显式传 `False`。
+
+### 修复：`llm_max_retries` 配成负数时 `invoke()` 静默返回 `None`
+
+`range(-1 + 1)` 让循环一次都不执行，旧代码在末尾 `return None`，调用方会在很远的地方炸在
+`result.tool_calls` 上、根因完全看不出来。现在次数夹到非负（仍执行一次），
+且那条不可达分支改为抛 `RuntimeError`。
+
+### 新增：GLM 模型表补充 GLM-5.3 / GLM-5.3-Flash / GLM-5.2（#112，by @FelixWang119）
+
+四个模型 ID 均已对照智谱官方模型总览页核实存在。quick 档新增 `glm-5.3-flash` 与 `glm-5.3`，
+deep 档新增 `glm-5.3` 与 `glm-5.2`。
+
+### 文档
+
+- 配置表补上 `llm_timeout` / `llm_max_retries` / `llm_retry_delay` 三项（中英文同步）。
+- 配置表补上远程 Ollama 的写法（#61）：`llm_provider` 选 `ollama`、`backend_url` 填
+  `http://<主机>:11434/v1`。这个能力一直都在，只是从没写进文档。
+
+### 测试
+
+新增 38 条（`tests/test_llm_timeout.py` 由 11 条增至 49 条）。全量在两套依赖上各跑一次，
+**均 0 failed**：
+
+| 环境 | Python | openai | langchain-openai | 结果 |
+|---|---|---|---|---|
+| A | 3.12.13 | 3.16.2 | 1.6.2 | 476 passed / 14 skipped / 48 subtests |
+| B | 3.13.13 | 2.48.0 | 1.4.1 | 477 passed / 13 skipped / 51 subtests |
+
+两者相差的那 1 passed / 1 skipped / 3 subtests 只来自 `tests/test_google_api_key.py`：
+环境 B 装了 `langchain-google-genai` 4.3.1，环境 A 没装（#87 的 httpx 冲突）。
+环境 A 的 476 − 38 = 438，与合并 #100+#112 后记录的基线一致。
+
+跑两套是因为本版的判据挂在 OpenAI SDK 的异常形状上：**两个大版本里
+408 → 裸 `APIStatusError`、409 → `ConflictError`、429 → `RateLimitError` 的映射都实测成立**，
+所以按状态码判这条实现是跨版本稳的。
+
+- 三个消费方的用例都走**真实构造路径**（建出 `TradingAgentsGraph` 并抓
+  `create_llm_client` 的实际入参），不在测试里照抄一遍待测的那份 kwargs。
+- provider 拼写的用例**必须打到真工厂**：只断言"被 patch 的工厂收到了什么 kwargs"
+  是假绿 —— 归一化不一致时恰恰是真工厂抛 `Unsupported LLM provider`。
+- 每条护栏都有阴性对照：降级到 anthropic 只拿超时不拿重试、role_llms 反方向、
+  400/401/404/422 第一次就抛、显式 `stream_usage=False` 要被尊重、
+  拼错的 provider 仍报错。
+- 16 个变异逐一验红（超时移进 OpenAI 门内 / 降级不带参数 / 降级按 llm_provider 算 /
+  role_llms 不重算 / 三处 provider 归一化各自退化 / 工厂 strip 过头 / 缓存键脱钩 /
+  捕获集合缩回 / 408 按类型判 / `APIStatusError` 一把梭 / 不夹负数 /
+  删 stream_usage / stream_usage 强开）。
+
+### 已知限制（本版未处理，均为既有问题，非本次引入）
+
+- **第三方网关若把错误包成非 OpenAI SDK 的异常类型**，应用层重试认不出来。
+  判据用的是 `openai` 的异常类，v0.5.18 的 `(InternalServerError, APITimeoutError)`
+  同样如此，本版只是把集合补全，没有改变这个前提。
+- **`claude_agent_sdk` 订阅覆盖的主路径不受 `llm_timeout` 保护**（见上）。
+- **降级 `fallback_spec` 不带各家私有参数**（如 google 的 `thinking_level`、
+  openai 的 `reasoning_effort`）。跨厂商降级时不带是对的；同厂商降级时会退回该
+  provider 的默认档位。这是 `fallback_spec` 自引入起的行为。
+
 ## [0.5.18] — 2026-09-20
 
 ### ⚠️ 兼容性：`langgraph` 最低版本提升至 1.0（#107，by @zhanghang02）

@@ -5,13 +5,42 @@ from typing import Any, Optional
 
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
-from openai import InternalServerError, APITimeoutError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from .base_client import BaseLLMClient, normalize_content, warn_if_truncated
 from .capabilities import get_capabilities
 from .validators import validate_model
 
 logger = logging.getLogger(__name__)
+
+# SDK 层 max_retries 被我们置 0（见 trading_graph._resilience_kwargs），所以应用层
+# 必须**至少覆盖 SDK 原本会重试的那一套**，否则"接管重试"就是净损失。
+# openai/_base_client.py::_should_retry 实测：408 / 409 / 429 / >=500 + 连接类异常。
+#   · >=500 → InternalServerError
+#   · 429   → RateLimitError（**不是** InternalServerError 的子类，实测 issubclass=False）
+#   · 连接类 → APIConnectionError（APITimeoutError 是它的子类，读超时一并覆盖）
+#   · 408 / 409 没有专属异常类型，只能按状态码认：408 → 裸 APIStatusError，
+#     409 → ConflictError。所以这里按 status_code 判，不按类型判。
+_RETRY_STATUS_CODES = frozenset({408, 409})
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """这个异常是不是 SDK 原本会重试的那一类。
+
+    阴性侧同样要紧：400 / 401 / 404 这些重试也没用的错误必须**第一次就抛**，
+    否则用户要干等三轮退避才看到"你的 key 不对"。所以这里不能图省事直接捕
+    `APIStatusError` —— 那会把鉴权错误也一起重试掉。
+    """
+    if isinstance(exc, (APIConnectionError, InternalServerError, RateLimitError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in _RETRY_STATUS_CODES
+    return False
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
@@ -34,32 +63,41 @@ class NormalizedChatOpenAI(ChatOpenAI):
     app_retry_delay: float = 5.0   # 初始退避（秒），指数翻倍：5s, 10s, 20s...
 
     def invoke(self, input, config=None, **kwargs):
-        # 应用层重试：SDK 层 max_retries 恒 0（见 _get_provider_kwargs），5xx 与
-        # 超时（APITimeoutError）会直接抛到这里，由本层按指数退避重试（5s, 10s,
-        # 20s...），而非 SDK 的 0.5s。超时单独捕获是因为 reasoning 模型（如
-        # minimax-m3）在复杂 prompt 下会间歇性读超时，重试一次大概率能救回。
-        for attempt in range(self.app_retries + 1):
+        # 应用层重试：SDK 层 max_retries 恒 0（见 trading_graph._resilience_kwargs），
+        # 错误直接抛到这里，由本层按指数退避重试（5s, 10s, 20s...），而非 SDK 的 0.5s。
+        # 可重试判据见模块级 `_is_retryable`：必须覆盖 SDK 原本会重试的那一套，
+        # 否则"关掉 SDK 重试、改由应用层接管"对用户是净损失。
+        #
+        # `attempts` 夹到非负：app_retries 是普通 int 字段、没有下界，有人按
+        # "-1 = 无限"的惯例去配时 range(0) 会让循环一次都不执行。
+        attempts = max(0, self.app_retries)
+        for attempt in range(attempts + 1):
             try:
                 response = super().invoke(input, config, **kwargs)
                 warn_if_truncated(response, self.model_name)
                 return normalize_content(response)
-            except (InternalServerError, APITimeoutError) as exc:
-                if attempt >= self.app_retries:
+            except (APIConnectionError, APIStatusError) as exc:
+                if not _is_retryable(exc) or attempt >= attempts:
                     raise
                 # 指数退避：app_retry_delay * 2^attempt（5s, 10s, 20s...）。
                 delay = self.app_retry_delay * (2 ** attempt)
-                if isinstance(exc, InternalServerError):
+                if isinstance(exc, APIStatusError):
                     logger.warning(
-                        "LLM 5xx（HTTP %s）请求失败，%s 秒后重试（%d/%d）",
-                        exc.status_code, delay, attempt + 1, self.app_retries,
+                        "LLM 请求失败（HTTP %s），%s 秒后重试（%d/%d）",
+                        exc.status_code, delay, attempt + 1, attempts,
                     )
                 else:
                     logger.warning(
-                        "LLM 请求超时（%s），%s 秒后重试（%d/%d）",
-                        type(exc).__name__, delay, attempt + 1, self.app_retries,
+                        "LLM 连接失败（%s），%s 秒后重试（%d/%d）",
+                        type(exc).__name__, delay, attempt + 1, attempts,
                     )
                 time.sleep(delay)
-        return None  # pragma: no cover - 循环必 raise 或 return
+        # 走不到：attempts >= 0 ⇒ 循环至少跑一轮，要么 return 要么 raise。
+        # 但**不写 return None** —— 真走到了，调用方会在很远的地方炸在
+        # `result.tool_calls` 上，根因完全看不出来（旧代码就是这样）。
+        raise RuntimeError(  # pragma: no cover - 防御性，正常不可达
+            f"LLM 重试循环未执行：app_retries={self.app_retries!r}"
+        )
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
         capabilities = get_capabilities(self.model_name)
@@ -185,6 +223,7 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "reasoning_effort", "max_tokens",
     "api_key", "callbacks", "http_client", "http_async_client",
+    "stream_usage",
 )
 
 # Provider base URLs and API key env vars
@@ -308,6 +347,16 @@ class OpenAIClient(BaseLLMClient):
         is_opencode_go = "opencode.ai" in base_url_for_check
         if is_opencode_go:
             llm_kwargs.setdefault("streaming", True)
+            # 开流式就必须一起开 stream_usage，否则 token 统计**静默归零**：
+            # langchain 只在非流式回复上自带 usage_metadata，流式下要显式
+            # stream_options.include_usage 才带得回来；而它的自动开启逻辑在设了
+            # openai_api_base 时直接跳过（ChatOpenAI._should_stream_usage）——
+            # opencode 这条路恒定设了 base_url，所以永远轮不到自动开启。
+            # 后果不报错：cli/stats_handler.py 只认 usage_metadata，整轮跑完面板
+            # 写 tokens_in=0 / tokens_out=0，看起来像"这次没花钱"。
+            # 用 setdefault 是为了留逃生口：stream_usage 在 _PASSTHROUGH_KWARGS 里，
+            # 用户显式传 False 时以用户的为准。
+            llm_kwargs.setdefault("stream_usage", True)
 
         # DeepSeek's thinking-mode quirks live in their own subclass so the
         # base NormalizedChatOpenAI stays free of provider-specific branches.

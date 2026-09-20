@@ -320,11 +320,14 @@ streamlit run web/app.py
 | `llm_provider` | `"minimax"` | LLM 提供商：`minimax` / `deepseek` / `qwen` / `glm` / `openai` / `anthropic` / `google` / `xai` / `ollama` |
 | `deep_think_llm` | `"MiniMax-M2.7"` | Research Manager + Portfolio Manager 用的模型 |
 | `quick_think_llm` | `"MiniMax-M2.7-highspeed"` | 所有 Analyst / Researcher / Trader 用的模型 |
-| `backend_url` | `None` | 自定义 API 端点 / 第三方中转网关。可在 Web UI 侧边栏填写，或用 `.env` 的 `BACKEND_URL`；方便国内通过代理访问 Claude / OpenAI |
+| `backend_url` | `None` | 自定义 API 端点 / 第三方中转网关。可在 Web UI 侧边栏填写，或用 `.env` 的 `BACKEND_URL`；方便国内通过代理访问 Claude / OpenAI。**跑远程 Ollama 也是填这里**：`llm_provider` 选 `ollama`、`backend_url` 填 `http://<主机>:11434/v1`，不填则默认本机 `http://localhost:11434/v1`（#61） |
 | `role_llms` | `{}` | **可选**：给单个角色指定另一家模型（如多空辩手用不同厂商），留空 = 全部沿用 quick/deep 两档，行为不变。见下方「分角色模型」 #39 |
 | `max_tokens` | `None` | 单次回复的最大输出 token 数。`None` = 用 provider 默认值。**报告写到一半就断，先调这里**（不是上下文超长）；也可用环境变量 `TRADINGAGENTS_MAX_TOKENS`。#91 |
 | `output_language` | `"Chinese"` | 报告输出语言（内部辩论始终英文） |
 | `market_lookback_days` | `None` | 技术分析回溯天数（分析区间 = 起始日期 → 分析日期）。Web/CLI 由「数据起始日期」自动算出；`None` = 模型自选（约 30 天）。#16 |
+| `llm_timeout` | `150` | 单次 LLM 请求超时（秒），**对所有走 LangChain 客户端的 provider 生效**（`openai` / `anthropic` / `google` / `azure` 及全部 OpenAI 兼容项，订阅撞额度后的降级客户端也带）。此前没有超时：LangChain 的三个封装层（ChatOpenAI / ChatAnthropic / AzureChatOpenAI）在没给超时时都把 `None` **显式**传给底层 SDK，而这在 httpx 里的语义是「不设超时」——挂起的网关会让分析**永久卡住**（进程活着、零输出、永不返回）。⚠️ **例外**：`claude_agent_sdk` 订阅覆盖的**主路径**不走 LangChain 客户端，不受本项保护（已知缺口；它的降级客户端不受影响）。深度推理模型如果经常在吐出首个 token 之前就超过这个值，把它调大（#100） |
+| `llm_max_retries` | `3` | 应用层重试次数，覆盖 408 / 409 / 429 / 5xx 与连接类错误（含读超时），即 OpenAI SDK 原本会重试的那一套。**仅作用于走 OpenAI 兼容客户端的 provider**（`openai` / `deepseek` / `qwen` / `glm` / `minimax` / `xai` / `openrouter` / `ollama` / `openai_compatible`）：只有它们的 SDK 层重试被置 0 并交给应用层；Anthropic / Google / Azure 沿用各家 SDK 自己的重试，不碰 |
+| `llm_retry_delay` | `5` | 重试初始退避秒数，指数翻倍：5s → 10s → 20s |
 | `max_debate_rounds` | `1` | Bull vs Bear 辩论轮数 |
 | `max_risk_discuss_rounds` | `1` | 风险三方辩论轮数 |
 | `data_vendors` | 全部 `"a_stock"` | 数据供应商路由 |
