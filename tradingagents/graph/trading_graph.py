@@ -286,6 +286,12 @@ class TradingAgentsGraph:
                     model=self.config[sdk_model_key],
                     base_url=self.config.get("backend_url"),
                     fallback_spec=fallback_spec,
+                    # 订阅**主路径**自己也要超时。它不走 LangChain 客户端，所以
+                    # v0.5.19 给所有 provider 加的那份 timeout 一点都罩不到它——
+                    # 上面 fallback_spec 里那个只在**已经降级之后**才生效，
+                    # 而卡死恰恰发生在降级之前。判据按 "claude_agent_sdk" 自己算：
+                    # 它不是 OpenAI 兼容客户端，只该拿 timeout，不该拿应用层重试。
+                    **self._resilience_kwargs("claude_agent_sdk"),
                 )
             return create_llm_client(
                 provider=self.config["llm_provider"],

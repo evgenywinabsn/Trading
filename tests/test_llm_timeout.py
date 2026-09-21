@@ -65,7 +65,11 @@ def clean_global_config():
 def _build_graph(tmp_path, overrides, selected_analysts=("market",)):
     """真的把 `TradingAgentsGraph` 建出来，抓每一次 `create_llm_client` 的入参。
 
-    返回 ``(主客户端调用列表, fallback_spec)``。
+    返回 ``(每一次 create_llm_client 的入参列表, fallback_spec)``。
+
+    第一个返回值包含**所有**客户端，订阅客户端（provider="claude_agent_sdk"）也在内
+    ——它本身也需要超时，而 `fallback_spec` 里那份只在降级**之后**才生效。
+    各用例一律按 provider / model 过滤自己关心的那条。
 
     🔴 不在测试里照抄一遍那份 kwargs —— 抄出来的断言改真代码也不会红，等于没测。
        仓库里就有一条那样的（test_agent_sdk_provider.test_fallback_spec_carries_callbacks
@@ -74,10 +78,9 @@ def _build_graph(tmp_path, overrides, selected_analysts=("market",)):
     seen = {"main": [], "fallback": None}
 
     def fake_create(**kw):
+        seen["main"].append(kw)
         if "fallback_spec" in kw:
             seen["fallback"] = kw["fallback_spec"]
-        else:
-            seen["main"].append(kw)
         return Mock(get_llm=Mock(return_value=Mock()))
 
     config = dict(DEFAULT_CONFIG)
@@ -342,6 +345,28 @@ class TestResilienceFollowsTargetProvider:
     每个都可能指向不同的 provider。按 `llm_provider` 一刀切，必然有两个消费方拿错。
     下面每条都走真实构造路径。
     """
+
+    def test_subscription_client_itself_carries_timeout(self, tmp_path):
+        # v0.5.19 只给**降级**客户端带了超时，订阅**主路径**自己一个都没有 ——
+        # 而挂死恰恰发生在降级之前：Agent SDK 的子进程卡住，async for 永远悬着。
+        # 下面一并做阴性对照：订阅客户端不走 OpenAIClient，那三个应用层重试键
+        # 它根本不读，注入进去只会污染 **kwargs。
+        main, _ = _build_graph(tmp_path, {
+            "llm_provider": "deepseek",
+            "deep_think_provider_override": "claude_agent_sdk",
+            "quick_think_provider_override": "claude_agent_sdk",
+            "agent_sdk_fallback_provider": "deepseek",
+            "agent_sdk_fallback_model": "deepseek-chat",
+            "llm_timeout": 150, "llm_max_retries": 3, "llm_retry_delay": 5,
+        })
+        sdk_clients = [kw for kw in main if kw["provider"] == "claude_agent_sdk"]
+        assert len(sdk_clients) == 2, (
+            f"deep+quick 都开了订阅，应建两个订阅客户端：{[k['provider'] for k in main]}"
+        )
+        for kw in sdk_clients:
+            assert kw["timeout"] == 150, "订阅主路径没拿到 llm_timeout ⇒ 卡住就永不返回"
+            for key in ("max_retries", "app_retries", "app_retry_delay"):
+                assert key not in kw, f"订阅客户端不该带 {key}：{kw.get(key)}"
 
     def test_openai_compatible_fallback_carries_timeout_and_retries(self, tmp_path):
         # 降级是**撞额度那一刻**才走到的路径，目标往往就是 OpenAI 兼容网关 ——
