@@ -325,7 +325,7 @@ streamlit run web/app.py
 | `max_tokens` | `None` | 单次回复的最大输出 token 数。`None` = 用 provider 默认值。**报告写到一半就断，先调这里**（不是上下文超长）；也可用环境变量 `TRADINGAGENTS_MAX_TOKENS`。#91 |
 | `output_language` | `"Chinese"` | 报告输出语言（内部辩论始终英文） |
 | `market_lookback_days` | `None` | 技术分析回溯天数（分析区间 = 起始日期 → 分析日期）。Web/CLI 由「数据起始日期」自动算出；`None` = 模型自选（约 30 天）。#16 |
-| `llm_timeout` | `150` | 单次 LLM 请求超时（秒），**对所有走 LangChain 客户端的 provider 生效**（`openai` / `anthropic` / `google` / `azure` 及全部 OpenAI 兼容项，订阅撞额度后的降级客户端也带）。此前没有超时：LangChain 的三个封装层（ChatOpenAI / ChatAnthropic / AzureChatOpenAI）在没给超时时都把 `None` **显式**传给底层 SDK，而这在 httpx 里的语义是「不设超时」——挂起的网关会让分析**永久卡住**（进程活着、零输出、永不返回）。⚠️ **例外**：`claude_agent_sdk` 订阅覆盖的**主路径**不走 LangChain 客户端，不受本项保护（已知缺口；它的降级客户端不受影响）。深度推理模型如果经常在吐出首个 token 之前就超过这个值，把它调大（#100） |
+| `llm_timeout` | `150` | 单次 LLM 请求超时（秒），**对所有走 LangChain 客户端的 provider 生效**（`openai` / `anthropic` / `google` / `azure` 及全部 OpenAI 兼容项，订阅撞额度后的降级客户端也带）。此前没有超时：LangChain 的三个封装层（ChatOpenAI / ChatAnthropic / AzureChatOpenAI）在没给超时时都把 `None` **显式**传给底层 SDK，而这在 httpx 里的语义是「不设超时」——挂起的网关会让分析**永久卡住**（进程活着、零输出、永不返回）。`claude_agent_sdk` 订阅覆盖的**主路径**不走 LangChain 客户端，v0.5.20 起由客户端自己实现同一个配置项：订阅调用的整段预算 = 本项 × 该次调用允许的模型轮数（Agent SDK 把整个工具循环跑在**一次**调用里，单轮调用就等于本项本身），超时按限流同样的路径降级。深度推理模型如果经常在吐出首个 token 之前就超过这个值，把它调大（#100） |
 | `llm_max_retries` | `3` | 应用层重试次数，覆盖 408 / 409 / 429 / 5xx 与连接类错误（含读超时），即 OpenAI SDK 原本会重试的那一套。**仅作用于走 OpenAI 兼容客户端的 provider**（`openai` / `deepseek` / `qwen` / `glm` / `minimax` / `xai` / `openrouter` / `ollama` / `openai_compatible`）：只有它们的 SDK 层重试被置 0 并交给应用层；Anthropic / Google / Azure 沿用各家 SDK 自己的重试，不碰 |
 | `llm_retry_delay` | `5` | 重试初始退避秒数，指数翻倍：5s → 10s → 20s |
 | `max_debate_rounds` | `1` | Bull vs Bear 辩论轮数 |

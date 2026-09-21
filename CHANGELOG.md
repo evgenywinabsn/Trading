@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.20] — 2026-09-21
+
+### 修复：`claude_agent_sdk` 订阅主路径此前完全没有超时（补上 v0.5.19 自己记下的那个缺口）
+
+v0.5.19 把 `llm_timeout` 铺到了每一个走 LangChain 客户端的 provider，同时在「已知限制」
+里写明订阅覆盖的**主路径**罩不到：`AgentSDKChatModel` 不经 LangChain，直接驱动 Agent SDK
+的异步生成器（背后是 `claude` 子进程）。子进程卡住 ⇒ `async for` 永远悬着 ⇒ 进程活着、
+零输出、永不返回。`fallback_spec` 里那份超时只在**已经降级之后**才生效，而挂死恰恰发生在
+降级之前。本版关掉这个缺口。
+
+- `ClaudeAgentSDKClient` 开始接收 `llm_timeout`（由 `trading_graph._resilience_kwargs()`
+  按目标 provider 注入，与其它 provider 同一个配置项，不新增配置键）。
+- **预算按"一次模型调用"换算**：`llm_timeout` 在别的 provider 那里是一次 HTTP 请求的超时，
+  分析师的 ReAct 循环由 LangGraph 在外面驱动，每轮各拿一份完整预算。Agent SDK 反过来，把
+  整个工具循环跑在**同一次** `.invoke()` 里（最多 `_TOOL_MAX_TURNS` 轮），所以整段预算
+  ＝ `llm_timeout × 本次允许的模型轮数`；单轮调用（deep / structured 节点）拿到的就是
+  `llm_timeout` 本身。⚠️ 整段固定 150 秒会让分析师几乎每次都超时并降级到**按 token 计费**
+  的 provider —— 正是启用订阅要避免的事。
+- 超时抛 `_SDKTimeout`，走**既有**的 `_FALLBACK_ERRORS` 通路：配了降级目标就降级，
+  没配就照常往外抛。认证失败仍然**不**在该元组里（降级 = 悄悄开始计费）。
+- 资源收尾：`_query` 在 `finally` 里显式关闭 SDK 异步生成器（连同它拉起的子进程），
+  不再依赖事件循环的 `shutdown_asyncgens` 兜底；只要配置了超时预算，无论调用方有没有
+  事件循环，都通过 daemon 工作线程 + 有界 join 兜底「SDK 连取消都不理」的情况。
+- 没配 `llm_timeout` 时行为与本版之前完全一致（不设超时）；布尔值 / `0` / 负数 /
+  解析不了的值一律落到"不设超时"，而不是"立刻超时"。
+
+### 修复：Alpha Vantage 的出站请求没有超时
+
+`alpha_vantage_common._make_api_request` 的 `requests.get` 不带 `timeout`，语义是
+**永远等下去**——与上面同一类静默卡死。新增模块级 `REQUEST_TIMEOUT = 30`（比仓内其它
+数据源的 10~15 秒宽一档：境外端点，且 `outputsize=full` 的全历史 CSV 是这里最大的响应）。
+
+### 测试
+
+新增 35 条（`tests/test_agent_sdk_timeout.py` 29 条 + `tests/test_alpha_vantage_timeout.py`
+5 条，另在 `tests/test_llm_timeout.py` 增 1 条钉配置透传）。全部不碰真实 provider：
+无网络、无子进程、无订阅额度。
+
+- ⚠️ 订阅超时的用例**刻意不挂 `requires_sdk`**：`claude-agent-sdk` 是可选 extra，干净安装
+  里装不上（现有 13 条 skip 就是它），把超时护栏挂在可选依赖上等于默认配置下一条都不跑。
+  改为用替身顶住模块里两个 SDK 名字，其余全走生产代码。
+- 9 个变异逐一验红：删掉订阅客户端的韧性注入 / `_timeout_for` 不按轮数放大 /
+  `_SDKTimeout` 退出 `_FALLBACK_ERRORS` / 去掉 `asyncio.wait_for` / 无界 `thread.join()` /
+  无事件循环主路径退回无界 `asyncio.run` / 布尔 `llm_timeout` 被当成秒数 /
+  `requests.get` 去掉 `timeout=` / `REQUEST_TIMEOUT` 写成 0。
+- 一条假绿当场修掉：`asyncio.run` 退出时会自动 `shutdown_asyncgens` 把生成器的 `finally`
+  补跑一遍，所以"超时后生成器被收尾"那条用例**删掉显式 aclose 照样绿**。补了一条手工开
+  循环、跑完不调 `shutdown_asyncgens` 的用例，才能把"`_query` 自己收的"和"循环兜底收的"分开。
+
 ## [0.5.19] — 2026-09-21
 
 ### 修复：LLM 请求此前没有超时，挂起的网关会让分析永久卡住（#100，by @k176060444-lgtm）
