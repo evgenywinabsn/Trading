@@ -20,6 +20,15 @@
   <a href="./CHANGES_FROM_UPSTREAM.md"><img alt="改动记录" src="https://img.shields.io/badge/改动记录-CHANGES-orange"/></a>
 </p>
 
+---
+
+**作者求职｜深圳 · 香港 · 远程**
+
+我是 Simon，专注于 AI Agent 与实用工具开发，正在寻找深圳、香港或远程工作机会。  
+欢迎联系：[evgeny.kpos@gmail.com](mailto:evgeny.kpos@gmail.com)。
+
+---
+
 <p align="center">
   <a href="#为什么做这个-fork">为什么做这个 Fork</a> ·
   <a href="#与上游对比">与上游对比</a> ·
@@ -578,4 +587,3 @@ config["agent_sdk_quick_model"] = "sonnet"    # 分析师节点
 #### 依赖说明
 
 `[agentsdk]` 的依赖链是 `claude-agent-sdk → mcp → httpx2`，**不碰 httpx**，与 mootdx 的 `httpx<0.26` 无冲突（已 `uv lock` 实测）——和 #87 里被移除的 `[google]` 情况不同，不需要单开 venv。
-
